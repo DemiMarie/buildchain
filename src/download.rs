@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io::{stdout, Read, Write};
+use std::process::{Command, Stdio};
 
 use crate::block::PackedBlock;
 use crate::store::b32dec;
@@ -19,10 +20,10 @@ pub struct DownloadArguments<'a> {
 
 pub struct Downloader {
     key: Vec<u8>,
-    url: reqwest::Url,
+    url: String,
     project: String,
     branch: String,
-    client: reqwest::blocking::Client,
+    cert_opt: Option<Vec<u8>>,
 }
 
 impl Downloader {
@@ -35,42 +36,82 @@ impl Downloader {
     ) -> Result<Downloader, String> {
         let key = b32dec(key).ok_or_else(|| "key not in base32 format".to_string())?;
 
-        let url = reqwest::Url::parse(url).map_err(err_str)?;
-
-        let client = {
-            let mut builder = reqwest::blocking::Client::builder();
-
-            if let Some(cert) = cert_opt {
-                builder = builder
-                    .add_root_certificate(reqwest::Certificate::from_pem(cert).map_err(err_str)?);
-            }
-
-            builder.build().map_err(err_str)?
-        };
+        let url = url.to_owned();
 
         Ok(Downloader {
             key,
             url,
             project: project.to_string(),
             branch: branch.to_string(),
-            client,
+            cert_opt: cert_opt.map(|x| x.to_owned()),
         })
     }
 
     fn download(&self, path: &str) -> Result<Vec<u8>, String> {
-        let url = self.url.join(path).map_err(err_str)?;
-        let mut response = self.client.get(url).send().map_err(err_str)?;
-        if !response.status().is_success() {
+        let url = self.url.to_owned() + "/" + path;
+        let updatevm = Command::new("/usr/bin/qubes-prefs")
+            .arg("updatevm")
+            .output()
+            .map_err(|e| e.to_string())?
+            .stdout;
+        let updatevm = String::from_utf8(updatevm).map_err(|e| e.to_string())?;
+        let updatevm = updatevm.trim();
+        if let Some(cert) = self.cert_opt.as_ref() {
+            let mut cmd = Command::new("/usr/bin/qvm-run");
+            cmd.args(&[
+                "--pass-io",
+                "-qa",
+                "--autostart",
+                "--user=root",
+                "--",
+                &updatevm,
+                // FIXME: ugly hack
+                // FIXME: racy!
+                "umask 0022 && cat > /run/update-cert.pem",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null());
+            let child = cmd.spawn().map_err(|e| e.to_string())?;
+            child
+                .stdin
+                .as_ref()
+                .expect("stdlib bug")
+                .write_all(&*cert)
+                .map_err(|e| e.to_string())?;
+            let output = child.wait_with_output().map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Failed to write certificate file: {}",
+                    output.status
+                ));
+            }
+        }
+        let mut cmd = Command::new("/usr/bin/qvm-run");
+        cmd.args(&[
+            "--pass-io",
+            "-qa",
+            "--autostart",
+            "--no-shell",
+            "--",
+            &updatevm,
+            "curl",
+        ])
+        .stdout(Stdio::piped());
+        if self.cert_opt.is_some() {
+            cmd.args(&["--cacert", "/run/update-cert.pem"]);
+            cmd.stdin(Stdio::piped());
+        } else {
+            cmd.stdin(Stdio::null());
+        }
+        let child = cmd.args(&["--", &url]).spawn().map_err(|e| e.to_string())?;
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !output.status.success() {
             return Err(format!(
-                "failed to download {}: {:?}",
-                path,
-                response.status()
+                "Child process exited with status {}",
+                output.status
             ));
         }
-
-        let mut data = Vec::new();
-        response.read_to_end(&mut data).map_err(err_str)?;
-        Ok(data)
+        Ok(output.stdout)
     }
 
     pub fn object(&self, digest: &str) -> Result<Vec<u8>, String> {

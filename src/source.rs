@@ -21,6 +21,7 @@ impl Source {
                 let status = Command::new("cp")
                     .arg("--preserve=all")
                     .arg("--recursive")
+                    .arg("--")
                     .arg(&self.url)
                     .arg(directory.as_ref())
                     .spawn()?

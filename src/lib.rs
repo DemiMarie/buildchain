@@ -4,10 +4,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-pub use lxd::Location;
-
 pub use crate::block::Block;
-pub use crate::build::{build, BuildArguments};
 pub use crate::config::Config;
 pub use crate::download::{download, DownloadArguments, Downloader};
 pub use crate::manifest::Manifest;
@@ -17,7 +14,6 @@ pub use crate::source::Source;
 pub use crate::store::Store;
 
 mod block;
-mod build;
 mod config;
 mod download;
 mod manifest;
