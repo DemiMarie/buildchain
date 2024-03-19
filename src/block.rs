@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use plain::{self, Plain};
+use plain::Plain;
 use serde::{Deserialize, Serialize};
-use sodalite::sign_attached_open;
+use std::ffi::{c_uchar, c_ulonglong, c_int};
 
 use crate::store::b32enc;
 
@@ -17,9 +17,11 @@ pub(crate) struct PackedBlockRequest {
     digest: [u8; 48],
 }
 
+const SIGLEN: usize = 64;
+
 #[repr(packed)]
 pub(crate) struct PackedBlock {
-    signature: [u8; 64],
+    signature: [u8; SIGLEN],
     public_key: [u8; 32],
     previous_signature: [u8; 64],
     counter: u64,
@@ -40,19 +42,26 @@ impl PackedBlock {
             ));
         }
 
-        {
-            let sm = unsafe { plain::as_bytes(self) };
+        #[link(name = ":libsodium.so.23")]
+        extern "C" {
+            fn crypto_sign_verify_detached(
+                sig: *const c_uchar,
+                m: *const c_uchar,
+                mlen: c_ulonglong,
+                pk: *const c_uchar,
+            ) -> c_int;
+        }
 
-            let mut m = vec![0; sm.len()];
-            match sign_attached_open(&mut m, sm, &self.public_key) {
-                Ok(count) => m.truncate(count),
-                Err(()) => return Err("signature invalid".to_string()),
-            }
-
-            // Check that message matches signed message after skipping the signature
-            if m != sm[64..] {
-                return Err("message data invalid".to_string());
-            }
+        if unsafe {
+            let ptr = self as *const _ as *const c_uchar;
+            crypto_sign_verify_detached(
+                ptr,
+                ptr.add(SIGLEN),
+                (core::mem::size_of::<Self>() - SIGLEN) as _,
+                ptr.add(SIGLEN),
+            ) != 0
+        } {
+            return Err("signature invalid".to_string());
         }
 
         Ok(Block {
