@@ -36,9 +36,18 @@ fn tail_to_block(sig: &[u8; 64]) -> PathBuf {
     PathBuf::from("../..").join(block_relpath(sig))
 }
 
+#[link(name = ":libsodium.so.23")]
+extern "C" {
+    fn randombytes_buf(
+        buf: *mut std::ffi::c_void,
+        size: usize,
+    ) -> std::ffi::c_void;
+}
+
 pub fn random_id() -> String {
     let mut key = [0u8; 15];
-    OsRng.fill_bytes(&mut key);
+    // SAFETY: the FFI function is correctly declared and called
+    unsafe { randombytes_buf(key.as_mut_ptr(), key.len()); }
     b32enc(&key)
 }
 

@@ -21,7 +21,6 @@ doc = false
 base32 = { version = "0.4.0", path = "../vendor/base32" }
 clap = "3.2.25"
 plain = "0.2.3"
-rand = "0.8.5"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.107"
 sha2 = "0.10.8"
